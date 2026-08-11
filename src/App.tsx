@@ -8,99 +8,150 @@ declare global {
   }
 }
 
-const PLAYLIST_ID = "PLyj8pcPC5up7pGVgAbrMb6f0cgSpVe_Ig";
+const PLAYLIST_ID  = "PLyj8pcPC5up7pGVgAbrMb6f0cgSpVe_Ig";
+const YT_API_KEY   = "AIzaSyB7JqLvT-mVyqIG6JCYk06fcLs0KNUU8_U";
 const DEFAULT_THUMB = "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=200&auto=format&fit=crop";
 
+// ── Fetch every video ID in the playlist (handles pagination) ──────────────
+async function fetchPlaylistVideoIds(): Promise<string[]> {
+  const ids: string[] = [];
+  let pageToken = '';
+  do {
+    const url =
+      `https://www.googleapis.com/youtube/v3/playlistItems` +
+      `?part=contentDetails&maxResults=50&playlistId=${PLAYLIST_ID}&key=${YT_API_KEY}` +
+      (pageToken ? `&pageToken=${pageToken}` : '');
+    try {
+      const res  = await fetch(url);
+      const data = await res.json();
+      for (const item of data.items ?? []) ids.push(item.contentDetails.videoId);
+      pageToken = data.nextPageToken ?? '';
+    } catch { break; }
+  } while (pageToken);
+  return ids;
+}
+
 function formatTime(s: number) {
-  if (!s || isNaN(s) || s < 0) return "0:00";
-  const m = Math.floor(s / 60);
-  return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+  if (!s || isNaN(s) || s < 0) return '0:00';
+  return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
 }
 
 function useClock() {
-  const [time, setTime] = useState(() => {
-    const d = new Date();
-    let h = d.getHours(); const m = d.getMinutes().toString().padStart(2, '0');
-    const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12;
+  const fmt = () => {
+    const d  = new Date();
+    let h    = d.getHours();
+    const m  = d.getMinutes().toString().padStart(2, '0');
+    const ap = h >= 12 ? 'pm' : 'am';
+    h = h % 12 || 12;
     return { hm: `${h}:${m}`, ap };
-  });
+  };
+  const [time, setTime] = useState(fmt);
   useEffect(() => {
-    const tick = () => {
-      const d = new Date();
-      let h = d.getHours(); const m = d.getMinutes().toString().padStart(2, '0');
-      const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12;
-      setTime({ hm: `${h}:${m}`, ap });
-    };
-    const id = setInterval(tick, 10000);
+    const id = setInterval(() => setTime(fmt()), 10000);
     return () => clearInterval(id);
   }, []);
   return time;
 }
 
 export default function App() {
-  const [isPlaying, setIsPlaying]     = useState(false);
+  const [isPlaying,   setIsPlaying]   = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration]       = useState(0);
-  const [trackTitle, setTrackTitle]   = useState("Desi Hip Hop");
-  const [trackArtist, setTrackArtist] = useState("DHH Playlist");
-  const [thumbUrl, setThumbUrl]       = useState(DEFAULT_THUMB);
-  const [isReady, setIsReady]         = useState(false);
-  const [isBgMuted, setIsBgMuted]     = useState(false);
+  const [duration,    setDuration]    = useState(0);
+  const [trackTitle,  setTrackTitle]  = useState('Loading...');
+  const [trackArtist, setTrackArtist] = useState('DHH Playlist');
+  const [thumbUrl,    setThumbUrl]    = useState(DEFAULT_THUMB);
+  const [isReady,     setIsReady]     = useState(false);
+  const [isBgMuted,   setIsBgMuted]   = useState(false);
 
-  const ytRef    = useRef<any>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const timerRef = useRef<number | null>(null);
-  const clock    = useClock();
+  const ytRef       = useRef<any>(null);
+  const videoRef    = useRef<HTMLVideoElement>(null);
+  const timerRef    = useRef<number | null>(null);
+  const videoIds    = useRef<string[]>([]);   // all playlist video IDs
+  const idx         = useRef(0);              // current position — WE own this
+  const transitioning = useRef(false);        // suppress false PAUSED during switch
+  const clock       = useClock();
 
-  // Autoplay background video; fallback to muted if browser blocks unmuted
+  // ── Background video autoplay ─────────────────────────────────────────────
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     v.muted = false;
-    v.play().catch(() => {
-      v.muted = true;
-      setIsBgMuted(true);
-      v.play().catch(() => {});
-    });
+    v.play().catch(() => { v.muted = true; setIsBgMuted(true); v.play().catch(() => {}); });
   }, []);
 
+  // ── Timer ─────────────────────────────────────────────────────────────────
   const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   const startTimer = () => {
     stopTimer();
     timerRef.current = window.setInterval(() => {
-      if (!ytRef.current) return;
-      try {
-        setCurrentTime(ytRef.current.getCurrentTime() || 0);
-        setDuration(ytRef.current.getDuration() || 0);
-      } catch (_) {}
+      try { setCurrentTime(ytRef.current?.getCurrentTime() || 0); setDuration(ytRef.current?.getDuration() || 0); } catch {}
     }, 500);
   };
 
+  // ── Metadata sync ─────────────────────────────────────────────────────────
   const syncMeta = useCallback(() => {
     try {
-      const data = ytRef.current?.getVideoData?.();
-      if (data?.title)    setTrackTitle(data.title);
-      if (data?.author)   setTrackArtist(data.author);
-      if (data?.video_id) setThumbUrl(`https://img.youtube.com/vi/${data.video_id}/hqdefault.jpg`);
-    } catch (_) {}
+      const d = ytRef.current?.getVideoData?.();
+      if (d?.title)    setTrackTitle(d.title);
+      if (d?.author)   setTrackArtist(d.author);
+      if (d?.video_id) setThumbUrl(`https://img.youtube.com/vi/${d.video_id}/hqdefault.jpg`);
+    } catch {}
   }, []);
 
+  // ── Core: load a specific video by our own index ──────────────────────────
+  const forcePlay = useCallback((retries = 6) => {
+    if (!ytRef.current || !transitioning.current) return; // stop if already playing or not transitioning
+    const state = ytRef.current.getPlayerState?.();
+    if (state === 1) { transitioning.current = false; return; } // already playing ✔
+    if (state !== 3) ytRef.current.playVideo?.();              // not buffering → kick it
+    if (retries > 0) setTimeout(() => forcePlay(retries - 1), 400);
+    else transitioning.current = false;                        // give up after ~2.4s
+  }, []);
+
+  const loadIdx = useCallback((i: number, direction: 'next' | 'prev' = 'next') => {
+    if (!ytRef.current) return;
+    const ids = videoIds.current;
+    if (ids.length === 0) {
+      // IDs not fetched yet — fall back to YouTube's own next/prev
+      transitioning.current = true;
+      direction === 'next' ? ytRef.current.nextVideo() : ytRef.current.previousVideo();
+      setTimeout(() => forcePlay(), 600); // still retry-force for fallback
+      return;
+    }
+    idx.current = ((i % ids.length) + ids.length) % ids.length;
+    transitioning.current = true;
+    ytRef.current.loadVideoById(ids[idx.current]);
+    setTimeout(() => forcePlay(), 400); // start retry loop 400ms after load
+  }, [forcePlay]);
+
+  // ── Bootstrap: fetch IDs + init YT API ───────────────────────────────────
   useEffect(() => {
+    // Fetch playlist IDs immediately; player falls back to nextVideo/previousVideo until ready
+    fetchPlaylistVideoIds().then(ids => {
+      if (ids.length) {
+        videoIds.current = ids;
+        console.log(`[DHH] Loaded ${ids.length} playlist tracks`);
+      } else {
+        console.warn('[DHH] Playlist fetch returned 0 IDs — will use YouTube native navigation');
+      }
+    });
+
     if (!window.YT) {
       const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
+      tag.src   = 'https://www.youtube.com/iframe_api';
       document.head.appendChild(tag);
     }
 
     window.onYouTubeIframeAPIReady = () => {
       ytRef.current = new window.YT.Player('yt-player', {
-        host: 'https://www.youtube.com',
+        host:   'https://www.youtube.com',
         height: '200',
-        width: '200',
+        width:  '200',
+        videoId: 'wLP2NzE2uw4',          // first song
         playerVars: {
           listType: 'playlist',
           list: PLAYLIST_ID,
-          autoplay: 1,
+          autoplay: 0,
           controls: 0,
           disablekb: 1,
           modestbranding: 1,
@@ -109,21 +160,19 @@ export default function App() {
           enablejsapi: 1,
         },
         events: {
-          onReady: () => {
-            setIsReady(true);
-            syncMeta();
-          },
+          onReady: () => { setIsReady(true); syncMeta(); },
           onStateChange: (e: any) => {
-            if (e.data === window.YT.PlayerState.PLAYING) {
+            const S = window.YT.PlayerState;
+            if (e.data === S.PLAYING) {
+              transitioning.current = false;
               setIsBgMuted(true);
               setIsPlaying(true);
               startTimer();
-              setTimeout(syncMeta, 200);
-            } else if (e.data === window.YT.PlayerState.PAUSED) {
-              setIsPlaying(false);
-              stopTimer();
-            } else if (e.data === window.YT.PlayerState.BUFFERING) {
-              setTimeout(syncMeta, 100);
+              setTimeout(syncMeta, 300);
+            } else if (e.data === S.PAUSED) {
+              if (!transitioning.current) { setIsPlaying(false); stopTimer(); }
+            } else if (e.data === S.ENDED) {
+              loadIdx(idx.current + 1);   // auto-advance uses our own index
             }
           },
         },
@@ -131,44 +180,17 @@ export default function App() {
     };
 
     return () => stopTimer();
-  }, [syncMeta]);
+  }, [syncMeta, loadIdx]);
+
+  // ── Controls ──────────────────────────────────────────────────────────────
+  const goNext = () => loadIdx(idx.current + 1, 'next');
+  const goPrev = () => loadIdx(idx.current - 1, 'prev');
 
   const togglePlay = () => {
     if (!ytRef.current || !isReady) return;
-    setIsBgMuted(true);
-    const state = ytRef.current.getPlayerState?.();
-    if (state === 1) { // playing
-      ytRef.current.pauseVideo();
-    } else {
-      const idx = ytRef.current.getPlaylistIndex?.();
-      if (idx === -1 || idx === undefined) {
-        ytRef.current.playVideoAt?.(0);
-      } else {
-        ytRef.current.playVideo?.();
-      }
-    }
-  };
-
-  const goNext = () => {
-    if (!ytRef.current || !isReady) return;
-    setIsBgMuted(true);
-    const idx = ytRef.current.getPlaylistIndex?.();
-    if (idx === -1 || idx === undefined) {
-      ytRef.current.playVideoAt?.(0);
-    } else {
-      ytRef.current.nextVideo?.();
-    }
-  };
-
-  const goPrev = () => {
-    if (!ytRef.current || !isReady) return;
-    setIsBgMuted(true);
-    const idx = ytRef.current.getPlaylistIndex?.();
-    if (idx === -1 || idx === undefined) {
-      ytRef.current.playVideoAt?.(0);
-    } else {
-      ytRef.current.previousVideo?.();
-    }
+    ytRef.current.getPlayerState?.() === 1
+      ? ytRef.current.pauseVideo()
+      : ytRef.current.playVideo();
   };
 
   const onSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
