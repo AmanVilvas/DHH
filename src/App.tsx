@@ -47,41 +47,25 @@ export default function App() {
   
   const [isReady, setIsReady] = useState(false);
   const [isBgMuted, setIsBgMuted] = useState(false);
-  const [hasStartedSong, setHasStartedSong] = useState(false);
 
   const ytRef = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const timerRef = useRef<number | null>(null);
   const clock = useClock();
 
-  // Handle background video autoplay & first interaction unmuting
+  // Attempt to autoplay video on mount. Try unmuted first, fallback to muted if blocked.
   useEffect(() => {
-    if (videoRef.current && !hasStartedSong) {
+    if (videoRef.current) {
       videoRef.current.muted = false;
       videoRef.current.play().catch(() => {
-        // If unmuted autoplay blocked by browser policy, keep video playing visually
         if (videoRef.current) {
           videoRef.current.muted = true;
+          setIsBgMuted(true);
           videoRef.current.play().catch(() => {});
         }
       });
     }
-
-    const handleFirstInteraction = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      // If user clicked inside the player, song will start, so don't unmute BG video
-      if (target && target.closest('.player')) return;
-
-      if (!hasStartedSong && videoRef.current) {
-        videoRef.current.muted = false;
-        setIsBgMuted(false);
-        videoRef.current.play().catch(() => {});
-      }
-    };
-
-    window.addEventListener('click', handleFirstInteraction);
-    return () => window.removeEventListener('click', handleFirstInteraction);
-  }, [hasStartedSong]);
+  }, []);
 
   const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   const startTimer = () => {
@@ -117,7 +101,6 @@ export default function App() {
         host: 'https://www.youtube.com',
         height: '200',
         width: '200',
-        videoId: 'wLP2NzE2uw4', // Explicitly provide the first video ID to ensure loading
         playerVars: {
           listType: 'playlist',
           list: PLAYLIST_ID,
@@ -136,18 +119,16 @@ export default function App() {
           },
           onStateChange: (e: any) => {
             if (e.data === window.YT.PlayerState.PLAYING) {
-              setHasStartedSong(true);
               setIsBgMuted(true);
-              if (videoRef.current) videoRef.current.muted = true;
               setIsPlaying(true);
               startTimer();
-              setTimeout(syncMeta, 300);
+              syncMeta();
+            } else if (e.data === window.YT.PlayerState.BUFFERING) {
+              syncMeta();
             } else {
               setIsPlaying(false);
               stopTimer();
               if (e.data === window.YT.PlayerState.ENDED) {
-                // Instantly update UI to feel faster
-                setTrackTitle("Loading next...");
                 ytRef.current?.nextVideo?.();
               }
             }
@@ -162,10 +143,6 @@ export default function App() {
   const togglePlay = () => {
     if (!ytRef.current || !isReady) return;
 
-    setHasStartedSong(true);
-    setIsBgMuted(true);
-    if (videoRef.current) videoRef.current.muted = true;
-
     const state = ytRef.current.getPlayerState?.();
     if (state === 1) { // playing
       ytRef.current.pauseVideo();
@@ -176,20 +153,14 @@ export default function App() {
 
   const next = () => {
     if (!ytRef.current) return;
-    setHasStartedSong(true);
-    setIsBgMuted(true);
-    if (videoRef.current) videoRef.current.muted = true;
-    setTrackTitle("Loading..."); // instant UI feedback
     ytRef.current.nextVideo();
+    setTimeout(syncMeta, 50);
   };
   
   const prev = () => {
     if (!ytRef.current) return;
-    setHasStartedSong(true);
-    setIsBgMuted(true);
-    if (videoRef.current) videoRef.current.muted = true;
-    setTrackTitle("Loading..."); // instant UI feedback
     ytRef.current.previousVideo();
+    setTimeout(syncMeta, 50);
   };
 
   const onSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
