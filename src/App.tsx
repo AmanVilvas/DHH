@@ -38,33 +38,30 @@ function useClock() {
 }
 
 export default function App() {
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying]     = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [trackTitle, setTrackTitle] = useState("Loading Track...");
-  const [trackArtist, setTrackArtist] = useState("...");
-  const [thumbUrl, setThumbUrl] = useState(DEFAULT_THUMB);
-  
-  const [isReady, setIsReady] = useState(false);
-  const [isBgMuted, setIsBgMuted] = useState(false);
+  const [duration, setDuration]       = useState(0);
+  const [trackTitle, setTrackTitle]   = useState("Desi Hip Hop");
+  const [trackArtist, setTrackArtist] = useState("DHH Playlist");
+  const [thumbUrl, setThumbUrl]       = useState(DEFAULT_THUMB);
+  const [isReady, setIsReady]         = useState(false);
+  const [isBgMuted, setIsBgMuted]     = useState(false);
 
-  const ytRef = useRef<any>(null);
+  const ytRef    = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const timerRef = useRef<number | null>(null);
-  const clock = useClock();
+  const clock    = useClock();
 
-  // Attempt to autoplay video on mount. Try unmuted first, fallback to muted if blocked.
+  // Autoplay background video; fallback to muted if browser blocks unmuted
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.muted = false;
-      videoRef.current.play().catch(() => {
-        if (videoRef.current) {
-          videoRef.current.muted = true;
-          setIsBgMuted(true);
-          videoRef.current.play().catch(() => {});
-        }
-      });
-    }
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = false;
+    v.play().catch(() => {
+      v.muted = true;
+      setIsBgMuted(true);
+      v.play().catch(() => {});
+    });
   }, []);
 
   const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
@@ -82,14 +79,13 @@ export default function App() {
   const syncMeta = useCallback(() => {
     try {
       const data = ytRef.current?.getVideoData?.();
-      if (data?.title) setTrackTitle(data.title);
-      if (data?.author) setTrackArtist(data.author);
+      if (data?.title)    setTrackTitle(data.title);
+      if (data?.author)   setTrackArtist(data.author);
       if (data?.video_id) setThumbUrl(`https://img.youtube.com/vi/${data.video_id}/hqdefault.jpg`);
     } catch (_) {}
   }, []);
 
   useEffect(() => {
-    // Load YouTube IFrame API
     if (!window.YT) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
@@ -104,7 +100,7 @@ export default function App() {
         playerVars: {
           listType: 'playlist',
           list: PLAYLIST_ID,
-          autoplay: 0,
+          autoplay: 1,
           controls: 0,
           disablekb: 1,
           modestbranding: 1,
@@ -122,15 +118,12 @@ export default function App() {
               setIsBgMuted(true);
               setIsPlaying(true);
               startTimer();
-              syncMeta();
-            } else if (e.data === window.YT.PlayerState.BUFFERING) {
-              syncMeta();
-            } else {
+              setTimeout(syncMeta, 200);
+            } else if (e.data === window.YT.PlayerState.PAUSED) {
               setIsPlaying(false);
               stopTimer();
-              if (e.data === window.YT.PlayerState.ENDED) {
-                ytRef.current?.nextVideo?.();
-              }
+            } else if (e.data === window.YT.PlayerState.BUFFERING) {
+              setTimeout(syncMeta, 100);
             }
           },
         },
@@ -142,25 +135,40 @@ export default function App() {
 
   const togglePlay = () => {
     if (!ytRef.current || !isReady) return;
-
+    setIsBgMuted(true);
     const state = ytRef.current.getPlayerState?.();
     if (state === 1) { // playing
       ytRef.current.pauseVideo();
     } else {
-      ytRef.current.playVideo();
+      const idx = ytRef.current.getPlaylistIndex?.();
+      if (idx === -1 || idx === undefined) {
+        ytRef.current.playVideoAt?.(0);
+      } else {
+        ytRef.current.playVideo?.();
+      }
     }
   };
 
-  const next = () => {
-    if (!ytRef.current) return;
-    ytRef.current.nextVideo();
-    setTimeout(syncMeta, 50);
+  const goNext = () => {
+    if (!ytRef.current || !isReady) return;
+    setIsBgMuted(true);
+    const idx = ytRef.current.getPlaylistIndex?.();
+    if (idx === -1 || idx === undefined) {
+      ytRef.current.playVideoAt?.(0);
+    } else {
+      ytRef.current.nextVideo?.();
+    }
   };
-  
-  const prev = () => {
-    if (!ytRef.current) return;
-    ytRef.current.previousVideo();
-    setTimeout(syncMeta, 50);
+
+  const goPrev = () => {
+    if (!ytRef.current || !isReady) return;
+    setIsBgMuted(true);
+    const idx = ytRef.current.getPlaylistIndex?.();
+    if (idx === -1 || idx === undefined) {
+      ytRef.current.playVideoAt?.(0);
+    } else {
+      ytRef.current.previousVideo?.();
+    }
   };
 
   const onSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,12 +181,8 @@ export default function App() {
 
   return (
     <>
-      {/* YouTube IFrame player — hidden off-screen */}
-      <div className="yt-hidden">
-        <div id="yt-player"></div>
-      </div>
+      <div className="yt-hidden"><div id="yt-player"></div></div>
 
-      {/* Background video */}
       <div className="hero-bg" aria-hidden="true">
         <video ref={videoRef} className="hero-video" loop muted={isBgMuted} playsInline>
           <source src="/dhh.mp4" type="video/mp4" />
@@ -187,12 +191,10 @@ export default function App() {
       </div>
 
       <main>
-        {/* Clock */}
         <div className="clock" aria-hidden="true">
           {clock.hm}<span className="meridiem">{clock.ap}</span>
         </div>
 
-        {/* Top-right Spotify link */}
         <div className="links">
           <a className="pill" href="https://open.spotify.com/playlist/4ZzKtefHWa1GMCJZsv75Te"
             target="_blank" rel="noopener noreferrer" aria-label="Open on Spotify">
@@ -208,7 +210,6 @@ export default function App() {
           </a>
         </div>
 
-        {/* Player horizontally aligned */}
         <section className="player" aria-label="Now playing">
           <div className={`disc ${isPlaying ? 'playing' : ''}`}>
             <img src={thumbUrl} alt="" width="64" height="64" />
@@ -218,7 +219,6 @@ export default function App() {
           <div className="meta">
             <div className="track-title">{trackTitle}</div>
             <div className="track-artist">{trackArtist}</div>
-
             <div className="seek-row">
               <input className="seek" type="range" min="0" max="1000" step="1"
                 value={seekVal} onChange={onSeek} aria-label="Seek" />
@@ -227,9 +227,9 @@ export default function App() {
               </div>
             </div>
           </div>
-          
+
           <div className="controls">
-            <button className="ctl" onClick={prev} aria-label="Previous track">
+            <button className="ctl" onClick={goPrev} aria-label="Previous track">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-11-7z"/></svg>
             </button>
             <button className="ctl play" onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
@@ -238,7 +238,7 @@ export default function App() {
                 : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
               }
             </button>
-            <button className="ctl" onClick={next} aria-label="Next track">
+            <button className="ctl" onClick={goNext} aria-label="Next track">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5l11 7-11 7z"/></svg>
             </button>
           </div>
